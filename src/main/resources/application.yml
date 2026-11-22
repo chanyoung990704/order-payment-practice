@@ -38,8 +38,6 @@ quote:
     enabled: ${QUOTE_REDIS:true}
   snapshot:
     interval-ms: ${QUOTE_SNAPSHOT_INTERVAL:5000}
-  archive:
-    group-id: quote-archive
 
 server:
   port: 8081

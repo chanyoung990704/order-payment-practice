@@ -156,6 +156,81 @@ QUOTE_REDIS=false ./gradlew bootRun
 
 Redis 서버가 없어도 컨텍스트가 뜨고, 테스트는 로컬 스토어 기준으로 동작합니다. 전체 **21개 테스트 통과**.
 
+## Kafka Batch 스냅샷 + 커밋 후 Offset (최종 구조)
+
+5초 스케줄러(`@Scheduled`)와 별도 메모리 버퍼를 **제거**했습니다. 대신 Kafka가 `poll()`한 배치를 그대로 처리합니다.
+
+```
+quote-events
+  ├─ quote-consumer        → Redis/로컬 캐시 → Spring Event → WebSocket (실시간)
+  └─ quote-snapshot-group  → 배치 수신 → 종목별 최신 seq 집계
+                              → DB UPDATE/INSERT (@Transactional)
+                              → ack.acknowledge()  (DB 커밋 후에만)
+```
+
+### 핵심 3파일
+
+| 파일 | 역할 |
+|---|---|
+| `quote/snapshot/QuoteSnapshotBatchConsumer.java` | 배치 수신 → 종목별 최신 시퀀스만 남김 → writer 호출 → ack |
+| `quote/snapshot/QuoteSnapshotBatchWriter.java` | `@Transactional` 조건부 UPDATE 후 INSERT (seq 비교로 중복 방지) |
+| `quote/snapshot/QuoteSnapshotBatchKafkaConfig.java` | `setBatchListener(true)`, `MANUAL_IMMEDIATE`, 무제한 재시도 |
+
+```java
+writer.upsertBatch(quotes); // @Transactional 커밋 완료까지 대기
+ack.acknowledge();          // 그 다음에만 Offset 커밋
+```
+
+DB 저장이 실패하면 예외가 나서 `ack`에 도달하지 못하고, `DefaultErrorHandler`가 **같은 배치를 재시도**합니다.
+
+### 왜 UPSERT를 `MERGE + CASE`가 아니라 `CASE UPDATE → INSERT`로 했나
+
+H2의 `MERGE ... KEY`는 같은 PK에 **전체 행을 먼저 덮어써서** 시퀀스 비교 기회가 사라졌습니다 (테스트로 발견).
+그래서 `UPDATE ... WHERE symbol = ?`에 `CASE WHEN ? > last_sequence`를 먼저 실행하고, 영향 행이 0일 때만 `INSERT`하도록 바꿨습니다.
+중복 재처리(seq 동일) 시 가격이 덮어써지지 않는 것을 통합 테스트가 검증합니다.
+
+### 실행
+
+```bash
+# H2 (기본)
+./gradlew bootRun
+
+# MySQL 프로필 (실 운영 구조)
+SPRING_PROFILES_ACTIVE=snapshot-mysql \
+DB_PASSWORD=... ./gradlew bootRun
+```
+
+MySQL DDL은 `docs/diagrams` 설명 대신 아래 참고:
+
+```sql
+CREATE TABLE IF NOT EXISTS quote_snapshots (
+    symbol VARCHAR(32) PRIMARY KEY,
+    price BIGINT NOT NULL,
+    volume BIGINT NOT NULL,
+    last_sequence BIGINT NOT NULL,
+    updated_at_epoch_milli BIGINT NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB;
+```
+
+### 장애 시나리오
+
+| 상황 | DB | Kafka Offset | 결과 |
+|---|---|---|---|
+| UPSERT 중 DB 오류 | 롤백 | 미커밋 | 배치 재시도 |
+| DB 커밋 직후 종료 | 저장됨 | 미커밋 가능 | 같은 배치 재처리 → seq 조건이 중복 흡수 |
+| 정상 | 저장됨 | 커밋 | 다음 배치 |
+
+### 테스트 (총 24개 통과)
+
+- `DB_저장_실패시_Offset을_커밋하지_않는다` — ack 미호출 검증
+- `DB_성공시_Offset을_커밋한다` — 정상 흐름
+- `같은_배치에서_종목별_최신_시퀀스만_남긴다` — 4건 → 2건 집계
+- `더_큰_시퀀스만_갱신하고_오래된_시퀀시는_무시한다`
+- `같은_시퀀스의_재처리는_가격을_덮어쓰지_않는다`
+
+> 운영 시 `max.poll.interval.ms`와 메시지 보존 기간을 함께 관리해야 합니다. 무제한 재시도는 데이터 누락엔 유리하지만 처리 불가 메시지가 파티션을 막을 수 있어, 장애 알림·재시도 관찰·격리 정책이 필요합니다.
+
 ## 실행
 
 ```bash
