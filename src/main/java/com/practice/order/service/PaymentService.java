@@ -1,10 +1,7 @@
 package com.practice.order.service;
 
-import com.practice.order.domain.Account;
 import com.practice.order.domain.Money;
-import com.practice.order.domain.Order;
 import com.practice.order.domain.Payment;
-import com.practice.order.domain.PaymentStatus;
 import com.practice.order.gateway.GatewayRetry;
 import com.practice.order.gateway.PaymentGateway;
 import com.practice.order.gateway.PaymentGatewayException;
@@ -13,129 +10,92 @@ import com.practice.order.dto.PaymentRequest;
 import com.practice.order.dto.OrderResponse;
 import com.practice.order.exception.ErrorCode;
 import com.practice.order.exception.OrderException;
-import com.practice.order.repository.AccountRepository;
-import com.practice.order.repository.OrderRepository;
-import com.practice.order.repository.PaymentRepository;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 import java.util.UUID;
 
 @Service
-@Transactional(readOnly = true)
 public class PaymentService {
 
-    private final OrderRepository orderRepository;
-    private final AccountRepository accountRepository;
-    private final PaymentRepository paymentRepository;
+    private final PaymentTxService txService;
     private final PaymentGateway paymentGateway;
     private final GatewayRetry gatewayRetry;
 
-    public PaymentService(OrderRepository orderRepository,
-                          AccountRepository accountRepository,
-                          PaymentRepository paymentRepository,
+    public PaymentService(PaymentTxService txService,
                           PaymentGateway paymentGateway,
                           GatewayRetry gatewayRetry) {
-        this.orderRepository = orderRepository;
-        this.accountRepository = accountRepository;
-        this.paymentRepository = paymentRepository;
+        this.txService = txService;
         this.paymentGateway = paymentGateway;
         this.gatewayRetry = gatewayRetry;
     }
 
-    @Transactional
     public OrderResponse pay(String orderId, PaymentRequest request) {
-        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
+        Optional<Payment> existing = txService.findByIdempotencyKey(request.idempotencyKey());
         if (existing.isPresent()) {
             Payment payment = existing.get();
             if (!orderId.equals(payment.getOrderId())
                     || payment.getAmount().amount() != request.amount()) {
                 throw new OrderException(ErrorCode.IDEMPOTENCY_KEY_CONFLICT);
             }
-            Order order = orderRepository.findById(orderId)
-                    .orElseThrow(() -> new OrderException(ErrorCode.ORDER_NOT_FOUND));
-            return OrderResponse.from(order);
-        }
-
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new OrderException(ErrorCode.ORDER_NOT_FOUND));
-
-        Account account = accountRepository.findByUserIdForUpdate(order.getUserId())
-                .orElseThrow(() -> new OrderException(ErrorCode.ACCOUNT_NOT_FOUND));
-        if (!request.accountId().equals(account.getAccountId())) {
-            throw new OrderException(ErrorCode.ACCOUNT_NOT_FOUND);
+            return txService.getOrder(orderId);
         }
 
         Money amount = new Money(request.amount());
-        if (order.getAmount().amount() != amount.amount()) {
-            throw new OrderException(ErrorCode.INVALID_AMOUNT);
-        }
-
-        order.markPaymentPending();
-        try {
-            account.withdraw(amount);
-        } catch (IllegalArgumentException exception) {
-            throw new OrderException(ErrorCode.INSUFFICIENT_BALANCE);
-        }
+        txService.reserveAndWithdraw(orderId, request.accountId(), amount);
 
         String paymentKey = "pk-" + UUID.randomUUID();
+        PaymentGateway.ApprovalResult approval;
         try {
-            PaymentGateway.ApprovalResult approval = gatewayRetry.execute(
+            approval = gatewayRetry.execute(
                     () -> paymentGateway.approve(paymentKey, orderId, amount));
-
-            if (!approval.isSuccess() || approval.approvedAmount() != amount.amount()) {
-                throw new PaymentGatewayException("PG 승인 금액 불일치", false);
-            }
-
-            Payment payment = new Payment(approval.paymentKey(), orderId, amount,
-                    request.idempotencyKey(), PaymentStatus.SUCCESS);
-            paymentRepository.save(payment);
-            order.completePayment(approval.transactionKey());
         } catch (PaymentGatewayException exception) {
-            compensate(order, account, amount, paymentKey, request.idempotencyKey());
+            txService.compensate(orderId, amount,
+                    paymentKey, request.idempotencyKey());
             throw new OrderException(ErrorCode.PAYMENT_GATEWAY_FAILED);
         }
 
-        return OrderResponse.from(order);
+        if (!approval.isSuccess() || approval.approvedAmount() != amount.amount()) {
+            txService.compensate(orderId, amount,
+                    paymentKey, request.idempotencyKey());
+            throw new OrderException(ErrorCode.PAYMENT_GATEWAY_FAILED);
+        }
+
+        try {
+            txService.complete(orderId, approval.transactionKey(), approval.paymentKey(),
+                    amount, request.idempotencyKey());
+        } catch (RuntimeException exception) {
+            cancelApprovedPayment(approval.paymentKey());
+            txService.compensate(orderId, amount,
+                    approval.paymentKey(), request.idempotencyKey());
+            throw exception;
+        }
+
+        return txService.getOrder(orderId);
     }
 
-    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
-    public void compensate(Order order, Account account, Money amount,
-                           String paymentKey, String idempotencyKey) {
-        account.deposit(amount);
-        paymentRepository.save(new Payment(paymentKey, order.getOrderId(), amount,
-                idempotencyKey, PaymentStatus.FAILED));
-    }
-
-    @Transactional
     public OrderResponse cancel(String orderId, String idempotencyKey) {
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new OrderException(ErrorCode.ORDER_NOT_FOUND));
+        Payment payment = txService.findPayment(idempotencyKey);
+        OrderResponse response = txService.refundWithoutPg(orderId);
 
-        Account account = accountRepository.findByUserIdForUpdate(order.getUserId())
-                .orElseThrow(() -> new OrderException(ErrorCode.ACCOUNT_NOT_FOUND));
+        if (payment != null) {
+            cancelApprovedPayment(payment.getPaymentId());
+        }
+        return response;
+    }
 
-        order.cancel();
-        account.deposit(order.getAmount());
-
-        paymentRepository.findByIdempotencyKey(idempotencyKey).ifPresent(payment -> {
-            try {
-                gatewayRetry.execute(() -> {
-                    paymentGateway.cancel(payment.getPaymentId(), "고객 요청 취소");
-                    return null;
-                });
-            } catch (PaymentGatewayException exception) {
-                throw new OrderException(ErrorCode.PAYMENT_CANCEL_FAILED);
-            }
-        });
-
-        return OrderResponse.from(order);
+    private void cancelApprovedPayment(String paymentKey) {
+        try {
+            gatewayRetry.execute(() -> {
+                paymentGateway.cancel(paymentKey, "보상 취소");
+                return null;
+            });
+        } catch (PaymentGatewayException exception) {
+            throw new OrderException(ErrorCode.PAYMENT_CANCEL_FAILED);
+        }
     }
 
     public AccountResponse getAccount(String accountId) {
-        Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new OrderException(ErrorCode.ACCOUNT_NOT_FOUND));
-        return AccountResponse.from(account);
+        return txService.getAccount(accountId);
     }
 }

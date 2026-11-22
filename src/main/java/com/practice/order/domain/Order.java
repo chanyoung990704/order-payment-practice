@@ -85,6 +85,15 @@ public class Order {
         this.updatedAt = Instant.now();
     }
 
+    public void failPayment() {
+        if (this.status != OrderStatus.PAYMENT_PENDING) {
+            throw new IllegalStateException("결제 실패 처리할 수 없는 상태입니다: " + status);
+        }
+        this.status = OrderStatus.CREATED;
+        this.paymentId = null;
+        this.updatedAt = Instant.now();
+    }
+
     public void cancel() {
         if (!status.canCancel()) {
             throw new IllegalStateException("취소할 수 없는 상태입니다: " + status);

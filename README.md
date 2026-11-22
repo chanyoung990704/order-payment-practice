@@ -231,6 +231,26 @@ CREATE TABLE IF NOT EXISTS quote_snapshots (
 
 > 운영 시 `max.poll.interval.ms`와 메시지 보존 기간을 함께 관리해야 합니다. 무제한 재시도는 데이터 누락엔 유리하지만 처리 불가 메시지가 파티션을 막을 수 있어, 장애 알림·재시도 관찰·격리 정책이 필요합니다.
 
+## PG 외부 호출을 트랜잭션 밖으로 분리
+
+`PaymentService`는 더 이상 `@Transactional`을 갖지 않습니다. DB 작업은 모두 별도 빈 `PaymentTxService`에 위임하고, PG 호출은 그 트랜잭션들 **사이**에서 수행합니다. (같은 클래스 내부 호출은 Spring AOP 프록시를 안 타므로 빈 분리가 필수입니다.)
+
+```
+[pay]
+1. txService.reserveAndWithdraw()   ← 트랜잭션 커밋 (출금 + PAYMENT_PENDING)
+2. paymentGateway.approve()         ← 외부 API (DB 커넥션/락 없음) ⚡
+3. txService.complete()             ← 별도 트랜잭션 커밋 (Payment 저장 + PAID)
+   실패 시: cancelApprovedPayment() → txService.compensate() (잔액 복구 + CREATED 복귀)
+
+[cancel]
+1. txService.refundWithoutPg()      ← DB 취소/환불 먼저 커밋
+2. paymentGateway.cancel()          ← 커밋 후 PG 취소
+```
+
+`Order.failPayment()`를 추가해 보상 시 `PAYMENT_PENDING → CREATED`로 되돌립니다. PG 호출이 트랜잭션 밖으로 나가면서 "출금 커밋 후 PG 실패" 상황이 생기므로, 잔액 복구와 함께 주문 상태도 원상복구해야 테스트가 보장하는 원자성이 유지됩니다.
+
+효과: PG 응답 지연/장애 시간 동안 DB 트랜잭션과 계좌 비관적 락이 잡히지 않아 동시 결제 처리량과 장애 격리가 개선됩니다.
+
 ## 실행
 
 ```bash
