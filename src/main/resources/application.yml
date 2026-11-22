@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: order-payment-practice
+  datasource:
+    url: jdbc:h2:mem:orders;DB_CLOSE_DELAY=-1;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+
+mock:
+  pg:
+    failure-rate: 0.0
+    delay-ms: 0
+
+kafka:
+  bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+  topic: quote-events
+  group-id: quote-consumer
+
+quote:
+  broadcast:
+    enabled: ${QUOTE_BROADCAST:true}
+
+server:
+  port: 8081

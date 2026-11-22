@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="820" viewBox="0 0 1240 820" font-family="'Segoe UI','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="kafka" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowLight" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8"/>
+    </marker>
+  </defs>
+
+  <rect width="1240" height="820" fill="url(#bg)"/>
+  <text x="40" y="56" fill="#f8fafc" font-size="28" font-weight="700">실시간 시세 파이프라인</text>
+  <text x="40" y="86" fill="#94a3b8" font-size="15">Kafka 파티셔닝 → 시퀀스 기반 최신가 캐시 → WebSocket 브로드캐스트</text>
+
+  <!-- lane labels -->
+  <text x="40" y="140" fill="#38bdf8" font-size="13" font-weight="700">PRODUCER</text>
+  <text x="40" y="380" fill="#a78bfa" font-size="13" font-weight="700">KAFKA</text>
+  <text x="40" y="560" fill="#34d399" font-size="13" font-weight="700">CONSUMER</text>
+
+  <!-- boxes -->
+  <g>
+    <rect x="40" y="160" width="230" height="96" rx="12" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+    <text x="155" y="196" fill="#e2e8f0" font-size="17" font-weight="700" text-anchor="middle">시세 발행 (REST)</text>
+    <text x="155" y="222" fill="#94a3b8" font-size="13" text-anchor="middle">POST /api/quotes</text>
+    <text x="155" y="242" fill="#94a3b8" font-size="13" text-anchor="middle">symbol, price, seq</text>
+  </g>
+
+  <g>
+    <rect x="360" y="160" width="230" height="96" rx="12" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+    <text x="475" y="196" fill="#e2e8f0" font-size="17" font-weight="700" text-anchor="middle">QuoteProducer</text>
+    <text x="475" y="222" fill="#94a3b8" font-size="13" text-anchor="middle">key = symbol</text>
+    <text x="475" y="242" fill="#7dd3fc" font-size="12" text-anchor="middle">murmur2(key) % partitions</text>
+  </g>
+
+  <g>
+    <rect x="700" y="160" width="250" height="96" rx="12" fill="url(#kafka)" stroke="#a78bfa" stroke-width="2"/>
+    <text x="825" y="196" fill="#ffffff" font-size="17" font-weight="700" text-anchor="middle">Kafka Topic</text>
+    <text x="825" y="222" fill="#ede9fe" font-size="13" text-anchor="middle">quote-events</text>
+    <text x="825" y="242" fill="#ddd6fe" font-size="12" text-anchor="middle">같은 종목 = 같은 파티션 = 순서 보장</text>
+  </g>
+
+  <!-- arrows row 1 -->
+  <line x1="270" y1="208" x2="350" y2="208" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="590" y1="208" x2="690" y2="208" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- kafka partitions -->
+  <g>
+    <rect x="700" y="400" width="250" height="110" rx="10" fill="#0f172a" stroke="#7c3aed" stroke-width="2"/>
+    <text x="825" y="428" fill="#c4b5fd" font-size="14" font-weight="700" text-anchor="middle">Partitions</text>
+    <rect x="716" y="442" width="66" height="52" rx="6" fill="#312e81"/>
+    <text x="749" y="474" fill="#e0e7ff" font-size="12" text-anchor="middle">P0</text>
+    <rect x="790" y="442" width="66" height="52" rx="6" fill="#312e81"/>
+    <text x="823" y="474" fill="#e0e7ff" font-size="12" text-anchor="middle">P1</text>
+    <rect x="864" y="442" width="66" height="52" rx="6" fill="#312e81"/>
+    <text x="897" y="474" fill="#e0e7ff" font-size="12" text-anchor="middle">P2</text>
+    <text x="825" y="518" fill="#94a3b8" font-size="12" text-anchor="middle">005930 → 항상 같은 파티션</text>
+  </g>
+  <line x1="825" y1="256" x2="825" y2="390" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- consumer -->
+  <g>
+    <rect x="680" y="580" width="280" height="104" rx="12" fill="#1e293b" stroke="#34d399" stroke-width="2"/>
+    <text x="820" y="616" fill="#e2e8f0" font-size="17" font-weight="700" text-anchor="middle">QuoteConsumer</text>
+    <text x="820" y="642" fill="#94a3b8" font-size="13" text-anchor="middle">@KafkaListener (groupId: quote-consumer)</text>
+    <text x="820" y="664" fill="#6ee7b7" font-size="12" text-anchor="middle">cache.update() → publishEvent()</text>
+  </g>
+  <line x1="825" y1="510" x2="825" y2="570" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- cache box -->
+  <g>
+    <rect x="360" y="580" width="260" height="104" rx="12" fill="#1e293b" stroke="#34d399" stroke-width="2"/>
+    <text x="490" y="616" fill="#e2e8f0" font-size="17" font-weight="700" text-anchor="middle">QuoteCache</text>
+    <text x="490" y="642" fill="#94a3b8" font-size="13" text-anchor="middle">ConcurrentHashMap&lt;symbol, LatestQuote&gt;</text>
+    <text x="490" y="664" fill="#6ee7b7" font-size="12" text-anchor="middle">sequence 비교 → 최신가만 유지</text>
+  </g>
+  <line x1="680" y1="632" x2="630" y2="632" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- async listener -->
+  <g>
+    <rect x="40" y="580" width="260" height="104" rx="12" fill="#1e293b" stroke="#34d399" stroke-width="2"/>
+    <text x="170" y="616" fill="#e2e8f0" font-size="17" font-weight="700" text-anchor="middle">BroadcastListener</text>
+    <text x="170" y="642" fill="#94a3b8" font-size="13" text-anchor="middle">@Async @EventListener</text>
+    <text x="170" y="664" fill="#6ee7b7" font-size="12" text-anchor="middle">컨슈머 블록 방지</text>
+  </g>
+  <line x1="360" y1="632" x2="310" y2="632" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- websocket -->
+  <g>
+    <rect x="40" y="726" width="600" height="66" rx="12" fill="#0c4a6e" stroke="#38bdf8" stroke-width="2"/>
+    <text x="340" y="752" fill="#f0f9ff" font-size="16" font-weight="700" text-anchor="middle">SimpMessagingTemplate → /topic/quotes/{symbol}</text>
+    <text x="340" y="776" fill="#bae6fd" font-size="12" text-anchor="middle">STOMP over WebSocket (SockJS) · 종목별 구독 격리</text>
+  </g>
+  <line x1="170" y1="684" x2="170" y2="720" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowLight)"/>
+
+  <!-- clients -->
+  <g>
+    <rect x="700" y="726" width="260" height="66" rx="12" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+    <text x="830" y="752" fill="#e2e8f0" font-size="15" font-weight="700" text-anchor="middle">Client A</text>
+    <text x="830" y="774" fill="#94a3b8" font-size="12" text-anchor="middle">구독: /topic/quotes/005930</text>
+  </g>
+  <g>
+    <rect x="980" y="726" width="220" height="66" rx="12" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+    <text x="1090" y="752" fill="#e2e8f0" font-size="15" font-weight="700" text-anchor="middle">Client B</text>
+    <text x="1090" y="774" fill="#94a3b8" font-size="12" text-anchor="middle">구독: /topic/quotes/000660</text>
+  </g>
+  <line x1="640" y1="759" x2="690" y2="759" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowLight)"/>
+  <line x1="960" y1="759" x2="970" y2="759" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowLight)"/>
+
+  <!-- notes -->
+  <g>
+    <rect x="980" y="140" width="220" height="220" rx="10" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+    <text x="996" y="166" fill="#fbbf24" font-size="13" font-weight="700">설계 포인트</text>
+    <text x="996" y="192" fill="#cbd5e1" font-size="11">1. key=symbol → 순서 보장</text>
+    <text x="996" y="214" fill="#cbd5e1" font-size="11">2. sequence 비교 → 역전 방어</text>
+    <text x="996" y="236" fill="#cbd5e1" font-size="11">3. 메모리 캐시 → 저지연</text>
+    <text x="996" y="258" fill="#cbd5e1" font-size="11">4. @Async → poll 간격 유지</text>
+    <text x="996" y="280" fill="#cbd5e1" font-size="11">5. 종목별 토픽 → 구독 격리</text>
+    <text x="996" y="316" fill="#64748b" font-size="10">테스트 5건: 브로커 없이 검증</text>
+    <text x="996" y="334" fill="#64748b" font-size="10">(총 17건 통과)</text>
+  </g>
+</svg>
