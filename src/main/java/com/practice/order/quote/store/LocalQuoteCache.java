@@ -1,4 +1,4 @@
-package com.practice.order.quote.consumer;
+package com.practice.order.quote.store;
 
 import com.practice.order.quote.domain.LatestQuote;
 import com.practice.order.quote.domain.QuoteEvent;
@@ -7,11 +7,12 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Component
-public class QuoteCache {
+@Component("localQuoteStore")
+public class LocalQuoteCache implements QuoteStore {
 
     private final Map<String, LatestQuote> latestBySymbol = new ConcurrentHashMap<>();
 
+    @Override
     public LatestQuote update(QuoteEvent event) {
         LatestQuote candidate = LatestQuote.from(event);
         latestBySymbol.merge(event.symbol(), candidate, (current, incoming) ->
@@ -19,10 +20,12 @@ public class QuoteCache {
         return latestBySymbol.get(event.symbol());
     }
 
+    @Override
     public LatestQuote get(String symbol) {
         return latestBySymbol.get(symbol);
     }
 
+    @Override
     public Map<String, LatestQuote> snapshot() {
         return Map.copyOf(latestBySymbol);
     }

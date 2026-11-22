@@ -1,9 +1,9 @@
 package com.practice.order.quote;
 
-import com.practice.order.quote.consumer.QuoteCache;
 import com.practice.order.quote.consumer.QuoteConsumer;
 import com.practice.order.quote.domain.LatestQuote;
 import com.practice.order.quote.domain.QuoteEvent;
+import com.practice.order.quote.store.LocalQuoteCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -20,7 +20,7 @@ import static org.mockito.Mockito.verify;
 
 class QuotePipelineTest {
 
-    private QuoteCache quoteCache;
+    private LocalQuoteCache quoteCache;
     private QuoteConsumer quoteConsumer;
     private SimpMessagingTemplate messagingTemplate;
     private ApplicationEventPublisher publisher;
@@ -28,7 +28,7 @@ class QuotePipelineTest {
 
     @BeforeEach
     void setUp() {
-        quoteCache = new QuoteCache();
+        quoteCache = new LocalQuoteCache();
         messagingTemplate = mock(SimpMessagingTemplate.class);
         publisher = event -> published.incrementAndGet();
         quoteConsumer = new QuoteConsumer(quoteCache, publisher, true);

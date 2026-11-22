@@ -118,6 +118,44 @@ WebSocket 구독: `ws://localhost:8081/ws-quote` (SockJS) → `/topic/quotes/005
 | `각_시세_이벤트는_웹소켓_발행_이벤트를_만든다` | 브로드캐스트 트리거 |
 | `종목별_토픽으로_시세가_전송된다` | `/topic/quotes/{symbol}` 라우팅 |
 
+## Redis 2차 캐시 + 스냅샷/원본 적재 (확장)
+
+ConcurrentHashMap을 1차 캐시로 유지하고, 그 위에 `QuoteStore` 인터페이스를 둬 구현체를 갈아끼울 수 있게 했습니다.
+
+```
+QuoteConsumer → QuoteStore
+                  ├─ LocalQuoteCache  (@Qualifier "localQuoteStore") 1차, WS용 저지연
+                  └─ RedisQuoteStore  (@Qualifier "redisQuoteStore") 2차, 인스턴스 간 공유
+
+별도 Kafka group(quote-archive) → QuoteArchiveConsumer → 원본 append-only
+@Scheduled(5s) → QuoteSnapshotWriter → 체크포인트 스냅샷
+```
+
+### 바꾼 지점만 정리
+
+| 파일 | 변경 |
+|---|---|
+| `quote/store/QuoteStore.java` | 신규 — `update/get/snapshot` 계약 |
+| `quote/store/LocalQuoteCache.java` | 기존 `QuoteCache` 코드 그대로, 이름만 변경 |
+| `quote/store/RedisQuoteStore.java` | 신규 — Lua로 seq 비교+쓰기 원자화 |
+| `resources/scripts/quote-compare-and-set.lua` | 신규 — 분산 환경의 `merge` 대응 |
+| `quote/consumer/QuoteConsumer.java` | `QuoteStore` 주입 (WS는 로컬 값으로 즉시 브로드캐스트) |
+| `quote/controller/QuoteController.java` | `QuoteStore` 주입 |
+| `quote/archive/QuoteArchiveConsumer.java` | 신규 — 별도 consumer group, `(symbol,sequence)` 멱등 |
+| `quote/archive/QuoteSnapshotWriter.java` | 신규 — 주기 체크포인트 |
+
+**왜 Lua인가**: `ConcurrentHashMap.merge`는 JVM 안에서만 원자적입니다. 여러 인스턴스가 Redis를 동시에 갱신하면 `GET→비교→SET` 사이 레이스가 생겨, Lua 스크립트로 Redis 단일 스레드에서 비교+쓰기를 한 번에 처리했습니다. `>=` 비교라 재발행 틱도 안전하게 흡수합니다.
+
+** 복구 흐름**: 스냅샷으로 Redis/로컬 캐시 워밍업 → Kafka offset부터 재소비 → seq 비교가 중복 틱을 자동 무시.
+
+### Redis 없이 실행/테스트
+
+```bash
+QUOTE_REDIS=false ./gradlew bootRun
+```
+
+Redis 서버가 없어도 컨텍스트가 뜨고, 테스트는 로컬 스토어 기준으로 동작합니다. 전체 **21개 테스트 통과**.
+
 ## 실행
 
 ```bash
